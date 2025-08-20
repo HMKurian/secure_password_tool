@@ -1,6 +1,6 @@
 import express from 'express';
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3001;
 import * as models from "./models/index.js";
 import * as bodyParser from "body-parser";
 import bcrypt from 'bcryptjs';
@@ -112,6 +112,37 @@ app.post('/passwords/save', async (req, res, next) => {
     res.json({message: 'Password is saved'});
 });
 
+app.post('/passwords/list', async (req, res, next) => {
+    const userId = req.auth.id;
+    const encryptionKey = req.body.encryption_key;
+    const modelsObj = await models.default;
+    let passwords = await modelsObj.UserPassword.findAll({
+        attributes: ['id', 'url', 'username', 'password', 'label', 'weak_encryption'],
+        where: { ownerUserId: userId },
+        order: [['id', 'DESC']]
+    });
+
+    const userRecord = await modelsObj.User.findOne({
+        attributes: ['encryption_key'], where: { id: userId }
+    });
+    const matched = await bcrypt.compare(encryptionKey, userRecord.encryption_key);
+    if (!matched) {
+        res.status(400);
+        return res.json({message: 'Incorrect encryption key'});
+    }
+    const passwordsArr = await Promise.all(
+        passwords.map(async (element) => {
+            // await upgradeWeakEncryption(element, userRecord, encryptionKey);
+            element.password = decrypt(element.password, encryptionKey);
+            element.username = decrypt(element.username, encryptionKey);
+            return element;
+        })
+    );
+    res.status(200);
+    res.json({message: 'Success', data: passwordsArr});
+});
+
+
 async function hashStr(str) {
     const salt = await bcrypt.genSalt(10);
     return bcrypt.hash(str, salt);
@@ -147,4 +178,16 @@ function decrypt(encStr, key) {
     let decrypted = decipher.update(encArr[0], 'base64', 'utf-8');
     decrypted += decipher.final('utf-8');
     return decrypted;
+}
+
+
+async function upgradeWeakEncryption(element, userRecord, encryptionKey) {
+    if (element.weak_encryption) {
+        const decryptedPassword = decrypt(element.password, userRecord.encryption_key);
+        const decryptedUserName = decrypt(element.username, userRecord.encryption_key);
+        element.password = encrypt(decryptedPassword, encryptionKey);
+        element.username = encrypt(decryptedUserName, encryptionKey);
+        element.weak_encryption = false;
+        await element.save();
+    }
 }
