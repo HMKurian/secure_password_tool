@@ -132,7 +132,7 @@ app.post('/passwords/list', async (req, res, next) => {
     }
     const passwordsArr = await Promise.all(
         passwords.map(async (element) => {
-            // await upgradeWeakEncryption(element, userRecord, encryptionKey);
+            await upgradeWeakEncryption(element, userRecord, encryptionKey);
             element.password = decrypt(element.password, encryptionKey);
             element.username = decrypt(element.username, encryptionKey);
             return element;
@@ -142,7 +142,61 @@ app.post('/passwords/list', async (req, res, next) => {
     res.json({message: 'Success', data: passwordsArr});
 });
 
-
+app.post('/passwords/share-password', async (req, res, next) => {
+    try {
+        const {password_id, encryption_key, email} = req.body;
+        const userId = req.auth.id;
+        const modelsObj = await models.default;
+        const passwordRow = await modelsObj.UserPassword.findOne({
+            attributes: ['label', 'url', 'username', 'password'], where: { id: password_id, ownerUserId: userId}
+        });
+        if (!passwordRow) {
+            res.status(400);
+            return res.json({message: 'Incorrect password_id'});
+        }
+        const userRecord = await modelsObj.User.findOne({
+            attributes: ['encryption_key'], where: { id: userId }
+        });
+        const matched = await bcrypt.compare(encryption_key, userRecord.encryption_key);
+        if (!matched) {
+            res.status(400);
+            return res.json({message: 'Incorrect encryption key'});
+        }
+        const shareUserObj = await modelsObj.User.findOne({attributes: ['id', 'encryption_key'], where: { email } });
+        if (!shareUserObj) {
+            res.status(400);
+            return res.json({message: 'User with whom you want to share password does not exist'});
+        }
+        const existingSharedPassword = await modelsObj.UserPassword.findOne({
+            attributes: ['id'], where: { source_password_id: password_id, ownerUserId: shareUserObj.id}
+        });
+        if (existingSharedPassword) {
+            res.status(400);
+            return res.json({message: `This password is already shared with the user`});
+        }
+        const decryptedUserName = decrypt(passwordRow.username, encryption_key);
+        const encryptedSharedUserName = encrypt(decryptedUserName, shareUserObj.encryption_key);// encrypting with hash of share user encryption key
+        const decryptedPassword = decrypt(passwordRow.password, encryption_key);
+        const encryptedSharedPassword = encrypt(decryptedPassword, shareUserObj.encryption_key);
+        const newPassword = {
+            ownerUserId: shareUserObj.id,
+            label: passwordRow.label,
+            url: passwordRow.url,
+            username: encryptedSharedUserName,
+            password: encryptedSharedPassword,
+            sharedByUserId: userId,
+            weak_encryption: true,
+            source_password_id: password_id
+        };
+        await modelsObj.UserPassword.create(newPassword);
+        return res.json({message: 'Password shared successfully'});
+    } catch (e) {
+        console.error(e);
+        res.status(500);
+        // todo log error in logging library.
+        return res.json({message: 'An error occurred.'})
+    }
+});
 async function hashStr(str) {
     const salt = await bcrypt.genSalt(10);
     return bcrypt.hash(str, salt);
