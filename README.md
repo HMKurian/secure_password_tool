@@ -1,4 +1,4 @@
-# oa_DB
+# Secure Password Tool
 
 # Example of how to generate migration and model files using sequelize
 npx sequelize-cli model:generate --name UserPassword --attributes ownerUserId:integer,url:string,username:string,password:string,sharedByUserId:integer
